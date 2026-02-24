@@ -19,8 +19,10 @@ const CONFIG = {
     CHANNEL_ID: process.env.CHANNEL_ID,
     WEBHOOK_URL: process.env.WEBHOOK_URL,
     MEMORY_FILE: path.join(__dirname, 'tappytoon_hafiza.json'),
+    CRUNCHY_MEMORY_FILE: path.join(__dirname, 'crunchyroll_hafiza.json'),
     INTERVAL_MS: 15 * 60 * 1000,
     THEME_COLOR: '#FF4B55',
+    CRUNCHY_COLOR: '#F47521',
     PREFIX: 's!'
 };
 
@@ -29,6 +31,11 @@ const API_URL = 'https://api-global.tappytoon.com/comics?excludes=wait_until_fre
 const TAPPYTOON = {
     PAGE_URL: 'https://www.tappytoon.com/en/comics/new',
     API_MATCH: 'api-global.tappytoon.com/comics'
+};
+
+const CRUNCHYROLL = {
+    URL: 'https://www.crunchyroll.com/news/manga',
+    NAME: 'Crunchyroll Manga'
 };
 
 const client = new Client({
@@ -189,6 +196,107 @@ async function fetchComics() {
 }
 
 // ═══════════════════════════════════════════
+//  Crunchyroll Scraper Logic
+// ═══════════════════════════════════════════
+async function fetchCrunchyrollNews() {
+    let browser = null;
+    try {
+        console.log('[Crunchyroll] Haberler çekiliyor...');
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+        await page.goto(CRUNCHYROLL.URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        // İçeriğin yüklenmesi için kısa bir süre bekle
+        await new Promise(r => setTimeout(r, 5000));
+
+        const items = await page.evaluate(() => {
+            const results = [];
+            // Crunchyroll basically uses article tags for cards now
+            const articles = Array.from(document.querySelectorAll('article'));
+
+            articles.forEach(art => {
+                const link = art.querySelector('a[href*="/news/"]');
+                if (!link) return;
+
+                const url = link.href;
+                // Basic check for article pattern
+                const isArticle = /\/news\/.*?\/\d{4}\/\d{1,2}\/\d{1,2}\//.test(url);
+                const isAuthor = url.includes('/news/author/');
+
+                if (isArticle && !isAuthor) {
+                    const title = art.querySelector('h2, h3, [class*="title"]')?.innerText.trim() || link.innerText.trim();
+
+                    // Resim çekme mantığını geliştir (Yüksek kalite öncelikli)
+                    let img = null;
+                    const imgEl = art.querySelector('img');
+                    if (imgEl) {
+                        // Eğer srcset varsa en büyük resmi almaya çalış, yoksa normal src
+                        img = imgEl.srcset ? imgEl.srcset.split(',').pop().trim().split(' ')[0] : imgEl.src;
+
+                        // Storyblok resmi ise m/ (metadata) kısmını temizle veya optimize et
+                        if (img.includes('a.storyblok.com') && img.includes('/m/')) {
+                            img = img.split('/m/')[0]; // Orijinal resmi al
+                        }
+                    }
+
+
+                    // Meta bilgileri çek
+                    let author = art.querySelector('[href*="/author/"]')?.innerText.trim();
+                    let category = art.querySelector('[class*="category"], [class*="tag"]')?.innerText.trim();
+                    let date = art.querySelector('time')?.innerText.trim() || art.querySelector('[class*="date"]')?.innerText.trim();
+
+                    // Temizlik (Bazen iç içe metinler gelebiliyor)
+                    if (category) category = category.split('\n')[0].trim();
+                    if (date) date = date.split('\n')[0].trim();
+
+                    if (title.length > 15 && !results.find(r => r.url === url)) {
+                        results.push({
+                            id: url,
+                            title,
+                            url,
+                            img,
+                            author: author || 'Bilinmiyor',
+                            category: category || 'MANGA',
+                            date: date || 'Yeni'
+                        });
+                    }
+                }
+            });
+
+            // Fallback (eğer article tagi yoksa)
+            if (results.length === 0) {
+                const links = Array.from(document.querySelectorAll('a'));
+                links.forEach(a => {
+                    const url = a.href;
+                    const title = a.innerText.trim();
+                    const isArticle = /\/news\/.*?\/\d{4}\/\d{1,2}\/\d{1,2}\//.test(url);
+                    if (isArticle && !url.includes('/author/') && title.length > 15) {
+                        if (!results.find(r => r.url === url)) {
+                            results.push({ id: url, title, url, img: null });
+                        }
+                    }
+                });
+            }
+            return results;
+        });
+
+
+        console.log(`[Crunchyroll] ${items.length} haber bulundu.`);
+        return items;
+
+    } catch (error) {
+        console.error(`[Crunchyroll Hatası] ${error.message}`);
+        return [];
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
+// ═══════════════════════════════════════════
 //  JSON Hafıza Yönetimi
 // ═══════════════════════════════════════════
 const MemoryManager = {
@@ -207,6 +315,17 @@ const MemoryManager = {
         if (!data || !Array.isArray(data)) return [];
         if (typeof data[0] === 'string') return data;
         return data.map(d => d.id);
+    },
+    loadGeneric: (file) => {
+        if (!fs.existsSync(file)) return null;
+        try {
+            return JSON.parse(fs.readFileSync(file, 'utf8'));
+        } catch (e) {
+            return [];
+        }
+    },
+    saveGeneric: (file, data) => {
+        fs.writeFileSync(file, JSON.stringify(data, null, 2));
     }
 };
 
@@ -295,13 +414,42 @@ function createDetailedEmbed(series, label = '🆕 Yeni Eklendi') {
     return embed;
 }
 
+function createCrunchyEmbed(news) {
+    const embed = new EmbedBuilder()
+        .setTitle(news.title)
+        .setURL(news.url)
+        .setColor(CONFIG.CRUNCHY_COLOR)
+        .setAuthor({
+            name: 'Crunchyroll Manga News',
+            iconURL: 'https://www.crunchyroll.com/news/img/favicons/favicon-v2-32x32.png'
+        })
+        .addFields(
+            { name: '🏷️ Kategori', value: news.category || 'Manga', inline: true },
+            { name: '📅 Tarih', value: news.date || 'Yeni', inline: true }
+        )
+        .setFooter({ text: 'Crunchyroll Manga Takip' })
+        .setTimestamp();
+
+    if (news.img) {
+        // Embed içinde büyük resim olarak göster
+        embed.setImage(news.img);
+        // Aynı resmi küçük thumbnail olarak da yana koy (bazı mobil cihazlarda daha iyi görünür)
+        embed.setThumbnail(news.img);
+    }
+
+    return embed;
+}
+
+
 // ═══════════════════════════════════════════
 //  Webhook ile Mesaj Gönderme
 // ═══════════════════════════════════════════
-async function sendViaWebhook(embeds, content = null) {
+async function sendViaWebhook(embeds, content = null, source = 'tappy') {
     const payload = {
-        username: 'Tappytoon Takip',
-        avatarURL: 'https://static.tappytoon.com/assets/favicons/favicon-32x32.png'
+        username: source === 'crunchy' ? 'Crunchyroll Takip' : 'Tappytoon Takip',
+        avatarURL: source === 'crunchy'
+            ? 'https://www.crunchyroll.com/news/img/favicons/favicon-v2-32x32.png'
+            : 'https://static.tappytoon.com/assets/favicons/favicon-32x32.png'
     };
 
     if (content) payload.content = content;
@@ -313,38 +461,72 @@ async function sendViaWebhook(embeds, content = null) {
 // ═══════════════════════════════════════════
 //  s!paylas — Manuel Paylaşım
 // ═══════════════════════════════════════════
-async function handlePaylas(message) {
-    try {
-        await message.reply('⏳ Tappytoon\'dan seriler çekiliyor...');
+async function handlePaylas(message, args) {
+    const subCommand = args[0]?.toLowerCase();
 
-        const rawComics = await fetchComics();
+    if (subCommand === 'crunchy' || subCommand === 'cr') {
+        try {
+            await message.reply('⏳ Crunchyroll\'dan haberler çekiliyor...');
+            const newsItems = await fetchCrunchyrollNews();
 
-        if (!rawComics || !Array.isArray(rawComics) || rawComics.length === 0) {
-            await message.reply('❌ Veri çekilemedi.');
-            return;
-        }
-
-        const comics = filterDuplicateVariants(rawComics);
-
-        await sendViaWebhook([], `📚 **Tappytoon — Yeni Çıkan Seriler** (${comics.length} adet)`);
-
-        // Sırayla tek tek gönder
-        for (let i = 0; i < comics.length; i++) {
-            const embed = createDetailedEmbed(comics[i], '📖 Mevcut Seri');
-            await sendViaWebhook([embed]);
-
-            // Her 5 mesajda 1 saniye bekle
-            if ((i + 1) % 5 === 0 && i + 1 < comics.length) {
-                await new Promise(r => setTimeout(r, 1000));
+            if (!newsItems || newsItems.length === 0) {
+                await message.reply('❌ Haber bulunamadı.');
+                return;
             }
+
+            await sendViaWebhook([], `📚 **Crunchyroll — En Yeni Manga Haberleri** (${newsItems.length} adet)`, 'crunchy');
+
+            // Sırayla gönder (hız limiti için 3'erli gruplar)
+            for (let i = 0; i < newsItems.length; i++) {
+                const embed = createCrunchyEmbed(newsItems[i]);
+                await sendViaWebhook([embed], null, 'crunchy');
+
+                if ((i + 1) % 3 === 0 && i + 1 < newsItems.length) {
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+            }
+
+            await sendViaWebhook([], `✅ Toplam **${newsItems.length}** haber listelendi.`, 'crunchy');
+            console.log(`[Komut] s!paylas crunchy — ${newsItems.length} haber paylaşıldı.`);
+
+        } catch (error) {
+            console.error(`[Komut Hatası CR] ${error.message}`);
+            await message.reply('❌ Crunchyroll hatası: ' + error.message);
         }
+    } else {
+        // Varsayılan: Tappytoon veya "tappy"
+        try {
+            await message.reply('⏳ Tappytoon\'dan seriler çekiliyor...');
 
-        await sendViaWebhook([], `✅ Toplam **${comics.length}** seri listelendi.`);
-        console.log(`[Komut] s!paylas — ${comics.length} seri paylaşıldı.`);
+            const rawComics = await fetchComics();
 
-    } catch (error) {
-        console.error(`[Komut Hatası] ${error.message}`);
-        await message.reply('❌ Hata: ' + error.message);
+            if (!rawComics || !Array.isArray(rawComics) || rawComics.length === 0) {
+                await message.reply('❌ Veri çekilemedi.');
+                return;
+            }
+
+            const comics = filterDuplicateVariants(rawComics);
+
+            await sendViaWebhook([], `📚 **Tappytoon — Yeni Çıkan Seriler** (${comics.length} adet)`);
+
+            // Sırayla tek tek gönder
+            for (let i = 0; i < comics.length; i++) {
+                const embed = createDetailedEmbed(comics[i], '📖 Mevcut Seri');
+                await sendViaWebhook([embed]);
+
+                // Her 5 mesajda 1 saniye bekle
+                if ((i + 1) % 5 === 0 && i + 1 < comics.length) {
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+            }
+
+            await sendViaWebhook([], `✅ Toplam **${comics.length}** seri listelendi.`);
+            console.log(`[Komut] s!paylas tappy — ${comics.length} seri paylaşıldı.`);
+
+        } catch (error) {
+            console.error(`[Komut Hatası Tappy] ${error.message}`);
+            await message.reply('❌ Tappytoon hatası: ' + error.message);
+        }
     }
 }
 
@@ -404,7 +586,48 @@ async function runAutoCheck() {
     } catch (error) {
         console.error(`[Döngü Hatası] ${error.message}`);
     }
+
+    // ═══════════════════════════════════════════
+    //  Crunchyroll Kontrol
+    // ═══════════════════════════════════════════
+    try {
+        console.log('[Crunchyroll] Kontrol başlatılıyor...');
+        const newsItems = await fetchCrunchyrollNews();
+
+        if (!newsItems || newsItems.length === 0) {
+            console.log('[Crunchyroll] Haber bulunamadı.');
+        } else {
+            const savedMemory = MemoryManager.loadGeneric(CONFIG.CRUNCHY_MEMORY_FILE);
+            const savedIds = MemoryManager.getIds(savedMemory);
+
+            if (savedMemory === null) {
+                console.log('[Crunchyroll] İlk çalıştırma: Silent Init.');
+                MemoryManager.saveGeneric(CONFIG.CRUNCHY_MEMORY_FILE, newsItems);
+            } else {
+                const newEntries = newsItems.filter(item => !savedIds.includes(item.id));
+
+                if (newEntries.length > 0) {
+                    for (const news of newEntries) {
+                        const embed = createCrunchyEmbed(news);
+                        await sendViaWebhook([embed], null, 'crunchy');
+                    }
+
+                    const updatedData = [...newsItems, ...(Array.isArray(savedMemory) ? savedMemory : [])].slice(0, 100);
+                    // Unique by ID
+                    const uniqueData = Array.from(new Map(updatedData.map(item => [item.id, item])).values());
+
+                    MemoryManager.saveGeneric(CONFIG.CRUNCHY_MEMORY_FILE, uniqueData);
+                    console.log(`[Crunchyroll] ${newEntries.length} yeni haber gönderildi.`);
+                } else {
+                    console.log('[Crunchyroll] Yeni haber yok.');
+                }
+            }
+        }
+    } catch (error) {
+        console.error(`[Crunchyroll Döngü Hatası] ${error.message}`);
+    }
 }
+
 
 // ═══════════════════════════════════════════
 //  Komut Dinleyici
@@ -413,10 +636,11 @@ client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     if (!message.content.startsWith(CONFIG.PREFIX)) return;
 
-    const command = message.content.slice(CONFIG.PREFIX.length).trim().toLowerCase();
+    const args = message.content.slice(CONFIG.PREFIX.length).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
 
     if (command === 'paylas') {
-        await handlePaylas(message);
+        await handlePaylas(message, args);
     }
 });
 
