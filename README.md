@@ -1,8 +1,8 @@
-# Mangapanel Bot 🤖
+# Mangapanel Bot 
 
 Crunchyroll ve Tappytoon üzerindeki yeni manga bölümlerini ve haberlerini takip eden, bunları Discord webhook'u üzerinden şık bir şekilde paylaşan otonom bir bot.
 
-## 🚀 Özellikler
+##  Özellikler
 
 - **Tappytoon Takip**: Yeni eklenen serileri ve varyantları otomatik tespit eder.
 - **Crunchyroll Takip**: En güncel manga haberlerini yazar, kategori ve görsel detaylarıyla paylaşır.
@@ -10,7 +10,7 @@ Crunchyroll ve Tappytoon üzerindeki yeni manga bölümlerini ve haberlerini tak
 - **Akıllı Filtre**: Aynı serinin farklı varyantlarını (Uncut, Mature vb.) otomatik filtreleyerek spamı engeller.
 - **Manuel Kontrol**: İstediğiniz zaman `s!paylas` komutlarıyla en güncel listeyi dökebilirsiniz.
 
-## 🛠️ Kurulum
+##  Kurulum
 
 ### 1. Gereksinimler
 - [Node.js](https://nodejs.org/) (v18 veya üzeri önerilir)
@@ -35,21 +35,21 @@ CHANNEL_ID=LOG_KANAL_ID
 WEBHOOK_URL=DISCORD_WEBHOOK_URL_ADRESI
 ```
 
-## 🏁 Çalıştırma
+##  Çalıştırma
 
 Botu başlatmak için:
 ```bash
 node index.js
 ```
 
-## ⌨️ Komutlar
+##  Komutlar
 
 Bot `s!` prefixini kullanır:
 
 - `s!paylas`: Tappytoon'daki en yeni serileri paylaşır.
 - `s!paylas crunchy` (veya `cr`): Crunchyroll'daki en güncel manga haberlerini paylaşır.
 
-## 📦 Kullanılan Modüller
+##  Kullanılan Modüller
 
 - `discord.js`: Discord API ile etkileşim.
 - `puppeteer`: Dinamik içerik ve token yakalama.
